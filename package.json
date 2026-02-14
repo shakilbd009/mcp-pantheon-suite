@@ -1,0 +1,8 @@
+{
+  "name": "mcp-pantheon-suite",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "servers/*"
+  ]
+}
