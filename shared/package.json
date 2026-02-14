@@ -1,0 +1,9 @@
+{
+  "name": "@mcp-suite/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": "./db.js",
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  }
+}
