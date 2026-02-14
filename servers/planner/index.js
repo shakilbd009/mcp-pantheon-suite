@@ -16,28 +16,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { createDb, getAgentName, uuid8, now } from "../../shared/db.js";
-
-// ── Schema ───────────────────────────────────────────────────────────
-
-function initSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS plans (
-      id TEXT PRIMARY KEY,
-      agent_name TEXT NOT NULL,
-      title TEXT NOT NULL,
-      steps TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'active',
-      progress TEXT DEFAULT '0/0',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      completed_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_plans_agent ON plans(agent_name);
-    CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(agent_name, status);
-  `);
-}
+import { createDb, getAgentName } from "../../shared/db.js";
+import {
+  initSchema,
+  createPlan,
+  updateStep,
+  getPlan,
+  listPlans,
+  completePlan,
+  abandonPlan,
+} from "./handlers.js";
 
 // ── Init ─────────────────────────────────────────────────────────────
 
@@ -49,30 +37,6 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-// ── Helpers ──────────────────────────────────────────────────────────
-
-function computeProgress(steps) {
-  const done = steps.filter((s) => s.status === "done").length;
-  return `${done}/${steps.length}`;
-}
-
-function formatPlan(plan, steps) {
-  const lines = [`Plan: ${plan.title} [${plan.status}] (${plan.progress})`];
-  lines.push(`ID: ${plan.id} | Created: ${plan.created_at}`);
-  lines.push("");
-  for (const step of steps) {
-    const icon =
-      step.status === "done" ? "✓" :
-      step.status === "in_progress" ? "▸" :
-      step.status === "blocked" ? "✗" :
-      step.status === "skipped" ? "–" : "○";
-    let line = `  ${icon} Step ${step.id}: ${step.description} [${step.status}]`;
-    if (step.notes) line += ` — ${step.notes}`;
-    lines.push(line);
-  }
-  return lines.join("\n");
-}
-
 // ── create_plan ──────────────────────────────────────────────
 
 server.tool(
@@ -82,44 +46,7 @@ server.tool(
     title: z.string().max(200).describe("Plan title (e.g. 'Deploy email notification system')"),
     steps: z.array(z.string().max(500)).min(1).max(20).describe("Ordered list of step descriptions"),
   },
-  async ({ title, steps }) => {
-    try {
-      const agent = getAgentName();
-      const planId = uuid8();
-      const ts = now();
-
-      // Supersede any existing active plan
-      db.prepare(
-        `UPDATE plans SET status = 'superseded', updated_at = ?
-         WHERE agent_name = ? AND status = 'active'`
-      ).run(ts, agent);
-
-      const stepList = steps.map((desc, i) => ({
-        id: i + 1,
-        description: desc,
-        status: "pending",
-        notes: "",
-        completed_at: null,
-      }));
-
-      const progress = `0/${stepList.length}`;
-
-      db.prepare(
-        `INSERT INTO plans
-         (id, agent_name, title, steps, status, progress, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`
-      ).run(planId, agent, title, JSON.stringify(stepList), progress, ts, ts);
-
-      return {
-        content: [{
-          type: "text",
-          text: `Plan created: ${planId}\n\n${formatPlan({ id: planId, title, status: "active", progress, created_at: ts }, stepList)}`,
-        }],
-      };
-    } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
-    }
-  }
+  async ({ title, steps }) => createPlan(db, getAgentName(), { title, steps })
 );
 
 // ── update_step ──────────────────────────────────────────────
@@ -133,57 +60,7 @@ server.tool(
     notes: z.string().optional().describe("Optional notes about this step"),
     plan_id: z.string().optional().describe("Plan ID (defaults to current active plan)"),
   },
-  async ({ step_id, status, notes, plan_id }) => {
-    try {
-      const agent = getAgentName();
-
-      let plan;
-      if (plan_id) {
-        plan = db.prepare("SELECT * FROM plans WHERE id = ?").get(plan_id);
-      } else {
-        plan = db.prepare(
-          "SELECT * FROM plans WHERE agent_name = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1"
-        ).get(agent);
-      }
-
-      if (!plan) {
-        return { content: [{ type: "text", text: "No active plan found. Create one with create_plan first." }] };
-      }
-
-      const steps = JSON.parse(plan.steps);
-      const step = steps.find((s) => s.id === step_id);
-      if (!step) {
-        return { content: [{ type: "text", text: `Step ${step_id} not found. Plan has ${steps.length} steps.` }] };
-      }
-
-      step.status = status;
-      if (notes !== undefined) step.notes = notes;
-      if (status === "done") step.completed_at = now();
-
-      const progress = computeProgress(steps);
-      const ts = now();
-
-      // Check if all steps are done → auto-complete
-      const allDone = steps.every((s) => s.status === "done" || s.status === "skipped");
-
-      if (allDone) {
-        db.prepare(
-          `UPDATE plans SET steps = ?, progress = ?, status = 'completed',
-           completed_at = ?, updated_at = ? WHERE id = ?`
-        ).run(JSON.stringify(steps), progress, ts, ts, plan.id);
-      } else {
-        db.prepare(
-          "UPDATE plans SET steps = ?, progress = ?, updated_at = ? WHERE id = ?"
-        ).run(JSON.stringify(steps), progress, ts, plan.id);
-      }
-
-      let msg = `Step ${step_id} → ${status} (${progress})`;
-      if (allDone) msg += "\n\nAll steps complete! Plan marked as completed.";
-      return { content: [{ type: "text", text: msg }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
-    }
-  }
+  async ({ step_id, status, notes, plan_id }) => updateStep(db, getAgentName(), { step_id, status, notes, plan_id })
 );
 
 // ── get_plan ─────────────────────────────────────────────────
@@ -194,29 +71,7 @@ server.tool(
   {
     plan_id: z.string().optional().describe("Specific plan ID (defaults to current active plan)"),
   },
-  async ({ plan_id }) => {
-    try {
-      const agent = getAgentName();
-
-      let plan;
-      if (plan_id) {
-        plan = db.prepare("SELECT * FROM plans WHERE id = ?").get(plan_id);
-      } else {
-        plan = db.prepare(
-          "SELECT * FROM plans WHERE agent_name = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1"
-        ).get(agent);
-      }
-
-      if (!plan) {
-        return { content: [{ type: "text", text: "No active plan found." }] };
-      }
-
-      const steps = JSON.parse(plan.steps);
-      return { content: [{ type: "text", text: formatPlan(plan, steps) }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
-    }
-  }
+  async ({ plan_id }) => getPlan(db, getAgentName(), { plan_id })
 );
 
 // ── list_plans ───────────────────────────────────────────────
@@ -228,38 +83,7 @@ server.tool(
     status: z.enum(["active", "completed", "abandoned", "superseded", "all"]).default("all").describe("Filter by status"),
     limit: z.number().min(1).max(50).default(10).describe("Max results"),
   },
-  async ({ status, limit }) => {
-    try {
-      const agent = getAgentName();
-
-      let rows;
-      if (status === "all") {
-        rows = db.prepare(
-          "SELECT * FROM plans WHERE agent_name = ? ORDER BY updated_at DESC LIMIT ?"
-        ).all(agent, limit);
-      } else {
-        rows = db.prepare(
-          "SELECT * FROM plans WHERE agent_name = ? AND status = ? ORDER BY updated_at DESC LIMIT ?"
-        ).all(agent, status, limit);
-      }
-
-      if (rows.length === 0) {
-        return { content: [{ type: "text", text: "No plans found." }] };
-      }
-
-      const lines = rows.map((r) => {
-        const icon =
-          r.status === "active" ? "▸" :
-          r.status === "completed" ? "✓" :
-          r.status === "abandoned" ? "✗" : "–";
-        return `${icon} [${r.id}] ${r.title} (${r.progress}) [${r.status}] — ${r.updated_at}`;
-      });
-
-      return { content: [{ type: "text", text: lines.join("\n") }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
-    }
-  }
+  async ({ status, limit }) => listPlans(db, getAgentName(), { status, limit })
 );
 
 // ── complete_plan ────────────────────────────────────────────
@@ -271,33 +95,7 @@ server.tool(
     plan_id: z.string().optional().describe("Plan ID (defaults to current active plan)"),
     notes: z.string().optional().describe("Completion notes"),
   },
-  async ({ plan_id, notes }) => {
-    try {
-      const agent = getAgentName();
-      const ts = now();
-
-      let plan;
-      if (plan_id) {
-        plan = db.prepare("SELECT * FROM plans WHERE id = ? AND status = 'active'").get(plan_id);
-      } else {
-        plan = db.prepare(
-          "SELECT * FROM plans WHERE agent_name = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1"
-        ).get(agent);
-      }
-
-      if (!plan) {
-        return { content: [{ type: "text", text: "No active plan found to complete." }] };
-      }
-
-      db.prepare(
-        "UPDATE plans SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?"
-      ).run(ts, ts, plan.id);
-
-      return { content: [{ type: "text", text: `Plan "${plan.title}" marked as completed.${notes ? " Notes: " + notes : ""}` }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
-    }
-  }
+  async ({ plan_id, notes }) => completePlan(db, getAgentName(), { plan_id, notes })
 );
 
 // ── abandon_plan ─────────────────────────────────────────────
@@ -309,43 +107,7 @@ server.tool(
     reason: z.string().describe("Why the plan is being abandoned"),
     plan_id: z.string().optional().describe("Plan ID (defaults to current active plan)"),
   },
-  async ({ reason, plan_id }) => {
-    try {
-      const agent = getAgentName();
-      const ts = now();
-
-      let plan;
-      if (plan_id) {
-        plan = db.prepare("SELECT * FROM plans WHERE id = ? AND status = 'active'").get(plan_id);
-      } else {
-        plan = db.prepare(
-          "SELECT * FROM plans WHERE agent_name = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1"
-        ).get(agent);
-      }
-
-      if (!plan) {
-        return { content: [{ type: "text", text: "No active plan found to abandon." }] };
-      }
-
-      // Append abandonment note as a step
-      const steps = JSON.parse(plan.steps);
-      steps.push({
-        id: steps.length + 1,
-        description: `[ABANDONED] ${reason}`,
-        status: "skipped",
-        notes: reason,
-        completed_at: ts,
-      });
-
-      db.prepare(
-        "UPDATE plans SET status = 'abandoned', steps = ?, updated_at = ? WHERE id = ?"
-      ).run(JSON.stringify(steps), ts, plan.id);
-
-      return { content: [{ type: "text", text: `Plan "${plan.title}" abandoned. Reason: ${reason}` }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
-    }
-  }
+  async ({ reason, plan_id }) => abandonPlan(db, getAgentName(), { reason, plan_id })
 );
 
 // ── Start ────────────────────────────────────────────────────
