@@ -2,6 +2,9 @@
   "name": "@mcp-suite/planner",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
   "bin": {
     "mcp-planner": "index.js"
   },
