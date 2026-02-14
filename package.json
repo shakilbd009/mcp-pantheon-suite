@@ -1,13 +1,13 @@
 {
   "name": "mcp-pantheon-suite",
   "private": true,
+  "scripts": {
+    "test": "vitest run"
+  },
   "workspaces": [
     "shared",
     "servers/*"
   ],
-  "scripts": {
-    "test": "vitest run"
-  },
   "devDependencies": {
     "vitest": "^4.0.18"
   }

@@ -37,7 +37,7 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-// ── create_plan ──────────────────────────────────────────────
+// ── Tools ────────────────────────────────────────────────────────────
 
 server.tool(
   "create_plan",
@@ -46,10 +46,8 @@ server.tool(
     title: z.string().max(200).describe("Plan title (e.g. 'Deploy email notification system')"),
     steps: z.array(z.string().max(500)).min(1).max(20).describe("Ordered list of step descriptions"),
   },
-  async ({ title, steps }) => createPlan(db, getAgentName(), { title, steps })
+  async (params) => createPlan(db, getAgentName(), params)
 );
-
-// ── update_step ──────────────────────────────────────────────
 
 server.tool(
   "update_step",
@@ -60,10 +58,8 @@ server.tool(
     notes: z.string().optional().describe("Optional notes about this step"),
     plan_id: z.string().optional().describe("Plan ID (defaults to current active plan)"),
   },
-  async ({ step_id, status, notes, plan_id }) => updateStep(db, getAgentName(), { step_id, status, notes, plan_id })
+  async (params) => updateStep(db, getAgentName(), params)
 );
-
-// ── get_plan ─────────────────────────────────────────────────
 
 server.tool(
   "get_plan",
@@ -71,10 +67,8 @@ server.tool(
   {
     plan_id: z.string().optional().describe("Specific plan ID (defaults to current active plan)"),
   },
-  async ({ plan_id }) => getPlan(db, getAgentName(), { plan_id })
+  async (params) => getPlan(db, getAgentName(), params)
 );
-
-// ── list_plans ───────────────────────────────────────────────
 
 server.tool(
   "list_plans",
@@ -83,10 +77,8 @@ server.tool(
     status: z.enum(["active", "completed", "abandoned", "superseded", "all"]).default("all").describe("Filter by status"),
     limit: z.number().min(1).max(50).default(10).describe("Max results"),
   },
-  async ({ status, limit }) => listPlans(db, getAgentName(), { status, limit })
+  async (params) => listPlans(db, getAgentName(), params)
 );
-
-// ── complete_plan ────────────────────────────────────────────
 
 server.tool(
   "complete_plan",
@@ -95,10 +87,8 @@ server.tool(
     plan_id: z.string().optional().describe("Plan ID (defaults to current active plan)"),
     notes: z.string().optional().describe("Completion notes"),
   },
-  async ({ plan_id, notes }) => completePlan(db, getAgentName(), { plan_id, notes })
+  async (params) => completePlan(db, getAgentName(), params)
 );
-
-// ── abandon_plan ─────────────────────────────────────────────
 
 server.tool(
   "abandon_plan",
@@ -107,10 +97,10 @@ server.tool(
     reason: z.string().describe("Why the plan is being abandoned"),
     plan_id: z.string().optional().describe("Plan ID (defaults to current active plan)"),
   },
-  async ({ reason, plan_id }) => abandonPlan(db, getAgentName(), { reason, plan_id })
+  async (params) => abandonPlan(db, getAgentName(), params)
 );
 
-// ── Start ────────────────────────────────────────────────────
+// ── Start ────────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
