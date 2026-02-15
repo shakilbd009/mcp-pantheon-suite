@@ -1,8 +1,16 @@
 {
   "name": "mcp-pantheon-suite",
   "private": true,
+  "scripts": {
+    "test": "vitest run --exclude tests/integration/",
+    "test:integration": "vitest run tests/integration/",
+    "test:all": "vitest run"
+  },
   "workspaces": [
     "shared",
     "servers/*"
-  ]
+  ],
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
 }
