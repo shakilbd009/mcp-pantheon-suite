@@ -88,14 +88,13 @@ export function recall(db, agentName, { query, tags, memory_type = "any", limit 
       return { content: [{ type: "text", text: `No memories found${filterNote}${tagNote}.` }] };
     }
 
-    // Bump access stats
+    // Bump access stats (batched)
     const ts = now();
-    const updateStmt = db.prepare(
-      "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?"
-    );
-    for (const r of rows) {
-      updateStmt.run(ts, r.id);
-    }
+    const ids = rows.map(r => r.id);
+    const placeholders = ids.map(() => '?').join(',');
+    db.prepare(
+      `UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id IN (${placeholders})`
+    ).run(ts, ...ids);
 
     const lines = rows.map((r) => {
       const memTags = JSON.parse(r.tags);
