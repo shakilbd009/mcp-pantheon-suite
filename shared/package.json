@@ -5,7 +5,10 @@
   "scripts": {
     "test": "vitest run"
   },
-  "exports": "./db.js",
+  "exports": {
+    "./db.js": "./db.js",
+    "./query.js": "./query.js"
+  },
   "dependencies": {
     "better-sqlite3": "^11.0.0"
   }
