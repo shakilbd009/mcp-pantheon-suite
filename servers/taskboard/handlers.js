@@ -3,7 +3,7 @@
  * Each handler accepts (db, agentName, params) and returns MCP-compatible results.
  */
 import { uuid8, now } from "../../shared/db.js";
-import { buildWhereClause, buildSetClause } from "../../shared/query.js";
+import { buildWhereClause, buildSetClause, safeJsonParse } from "../../shared/query.js";
 
 // ── Schema ───────────────────────────────────────────────────────────
 
@@ -343,8 +343,7 @@ export function getTask(db, agentName, { task_id }) {
     if (reviews.length > 0) {
       lines.push("", `--- Reviews (${reviews.length}) ---`);
       for (const r of reviews) {
-        let cats;
-        try { cats = r.categories ? JSON.parse(r.categories) : []; if (!Array.isArray(cats)) cats = []; } catch { console.error("[warn] review " + r.id + ": corrupt categories JSON"); cats = []; }
+        const cats = safeJsonParse(r.categories, [], "review " + r.id + " categories");
         const catStr = cats.length > 0 ? ` [${cats.join(", ")}]` : "";
         lines.push(`[${r.created_at}] ${r.author}: ${r.verdict.toUpperCase()}${catStr}`);
         lines.push(`  ${r.content}`);
@@ -808,8 +807,7 @@ export function listInitiatives(db, agentName, { status = "active", owner, limit
     const lines = rows.map((i) => {
       const pct = i.progress_pct || 0;
       const target = i.target_date ? ` (target: ${i.target_date})` : "";
-      let agents;
-      try { agents = JSON.parse(i.participating_agents || "[]"); if (!Array.isArray(agents)) agents = []; } catch { console.error("[warn] initiative " + i.id + ": corrupt participating_agents JSON"); agents = []; }
+      const agents = safeJsonParse(i.participating_agents, [], "initiative " + i.id + " agents");
       const agentStr = agents.length ? ` → ${agents.join(", ")}` : "";
       return `${i.id} | [${i.status}] ${pct}% | ${i.title} (owner: ${i.owner})${agentStr}${target}`;
     });
@@ -827,8 +825,8 @@ export function getInitiative(db, agentName, { initiative_id }) {
       return { content: [{ type: "text", text: `Initiative '${initiative_id}' not found.` }], isError: true };
     }
 
-    let participants, criteria;
-    try { participants = JSON.parse(initiative.participating_agents || "[]"); if (!Array.isArray(participants)) participants = []; } catch { console.error("[warn] initiative " + initiative.id + ": corrupt participating_agents JSON"); participants = []; }
+    const participants = safeJsonParse(initiative.participating_agents, [], "initiative " + initiative.id + " agents");
+    let criteria;
     try {
       criteria = JSON.parse(initiative.success_criteria || "[]");
       if (!Array.isArray(criteria)) criteria = [];

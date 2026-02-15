@@ -3,7 +3,7 @@
  * Each handler accepts (db, agentName, params) and returns MCP-compatible results.
  */
 import { uuid8, now } from "../../shared/db.js";
-import { buildWhereClause, buildSetClause } from "../../shared/query.js";
+import { buildWhereClause, buildSetClause, safeJsonParse } from "../../shared/query.js";
 
 // ── Schema ───────────────────────────────────────────────────────────
 
@@ -91,14 +91,7 @@ export function recall(db, agentName, { query, tags, memory_type = "any", limit 
     ).run(ts, ...ids);
 
     const lines = rows.map((r) => {
-      let memTags;
-      try {
-        memTags = JSON.parse(r.tags);
-        if (!Array.isArray(memTags)) memTags = ["CORRUPTED"];
-      } catch {
-        console.error(`[warn] memory ${r.id}: corrupt tags JSON`);
-        memTags = ["CORRUPTED"];
-      }
+      const memTags = safeJsonParse(r.tags, ["CORRUPTED"], "memory " + r.id + " tags");
       return `[${r.id}] (${r.memory_type}, importance: ${r.importance}/10) ${r.content}\n  Tags: ${memTags.join(", ")} | Created: ${r.created_at} | Accessed: ${r.access_count + 1}x`;
     });
 
@@ -129,14 +122,7 @@ export function listMemories(db, agentName, { memory_type = "any", limit = 20 })
 
     const lines = rows.map((r) => {
       const preview = r.content.length > 100 ? r.content.slice(0, 100) + "..." : r.content;
-      let memTags;
-      try {
-        memTags = JSON.parse(r.tags);
-        if (!Array.isArray(memTags)) memTags = ["CORRUPTED"];
-      } catch {
-        console.error(`[warn] memory ${r.id}: corrupt tags JSON`);
-        memTags = ["CORRUPTED"];
-      }
+      const memTags = safeJsonParse(r.tags, ["CORRUPTED"], "memory " + r.id + " tags");
       return `[${r.id}] ${r.memory_type} (${r.importance}/10): ${preview}  [${memTags.join(", ")}]`;
     });
 
