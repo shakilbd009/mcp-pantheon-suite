@@ -104,7 +104,13 @@ export function updateStep(db, agentName, { step_id, status, notes, plan_id }) {
       return { content: [{ type: "text", text: "No active plan found. Create one with create_plan first." }] };
     }
 
-    const steps = JSON.parse(plan.steps);
+    let steps;
+    try {
+      steps = JSON.parse(plan.steps);
+      if (!Array.isArray(steps)) throw new Error("not an array");
+    } catch {
+      return { content: [{ type: "text", text: `Data corruption: plan ${plan.id} has invalid JSON in steps field. Plan cannot be updated.` }], isError: true };
+    }
     const step = steps.find((s) => s.id === step_id);
     if (!step) {
       return { content: [{ type: "text", text: `Step ${step_id} not found. Plan has ${steps.length} steps.` }] };
@@ -154,7 +160,13 @@ export function getPlan(db, agentName, { plan_id }) {
       return { content: [{ type: "text", text: "No active plan found." }] };
     }
 
-    const steps = JSON.parse(plan.steps);
+    let steps;
+    try {
+      steps = JSON.parse(plan.steps);
+      if (!Array.isArray(steps)) throw new Error("not an array");
+    } catch {
+      return { content: [{ type: "text", text: `Data corruption: plan ${plan.id} has invalid JSON in steps field.` }], isError: true };
+    }
     return { content: [{ type: "text", text: formatPlan(plan, steps) }] };
   } catch (err) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
@@ -237,19 +249,33 @@ export function abandonPlan(db, agentName, { reason, plan_id }) {
     }
 
     // Append abandonment note as a step
-    const steps = JSON.parse(plan.steps);
-    steps.push({
-      id: steps.length + 1,
-      description: `[ABANDONED] ${reason}`,
-      status: "skipped",
-      notes: reason,
-      completed_at: ts,
-    });
+    let steps;
+    let stepsCorrupted = false;
+    try {
+      steps = JSON.parse(plan.steps);
+      if (!Array.isArray(steps)) { stepsCorrupted = true; steps = []; }
+    } catch {
+      stepsCorrupted = true;
+      steps = [];
+    }
+
+    if (!stepsCorrupted) {
+      steps.push({
+        id: steps.length + 1,
+        description: `[ABANDONED] ${reason}`,
+        status: "skipped",
+        notes: reason,
+        completed_at: ts,
+      });
+    }
 
     db.prepare(
       "UPDATE plans SET status = 'abandoned', steps = ?, updated_at = ? WHERE id = ?"
     ).run(JSON.stringify(steps), ts, plan.id);
 
+    if (stepsCorrupted) {
+      return { content: [{ type: "text", text: `Plan "${plan.title}" abandoned. Warning: steps data was corrupted — abandonment note could not be appended.` }] };
+    }
     return { content: [{ type: "text", text: `Plan "${plan.title}" abandoned. Reason: ${reason}` }] };
   } catch (err) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
