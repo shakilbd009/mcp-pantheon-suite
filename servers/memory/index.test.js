@@ -139,6 +139,39 @@ describe("forget", () => {
   });
 });
 
+// ── Batch access-count update ────────────────────────────────────────
+
+describe("recall — batch access_count", () => {
+  it("should batch-update access_count on recall", () => {
+    // Store 3 memories with shared tag
+    quickStore("alice", { content: "Mem 1", tags: ["batch-test"], importance: 5 });
+    quickStore("alice", { content: "Mem 2", tags: ["batch-test"], importance: 5 });
+    quickStore("alice", { content: "Mem 3", tags: ["batch-test"], importance: 5 });
+
+    // First recall
+    recall(db, "alice", { tags: ["batch-test"] });
+
+    const rows1 = db.prepare(
+      "SELECT id, access_count, last_accessed FROM memories WHERE agent_name = ?"
+    ).all("alice");
+    expect(rows1).toHaveLength(3);
+    for (const r of rows1) {
+      expect(r.access_count).toBe(1);
+      expect(r.last_accessed).toBeTruthy();
+    }
+
+    // Second recall
+    recall(db, "alice", { tags: ["batch-test"] });
+
+    const rows2 = db.prepare(
+      "SELECT id, access_count FROM memories WHERE agent_name = ?"
+    ).all("alice");
+    for (const r of rows2) {
+      expect(r.access_count).toBe(2);
+    }
+  });
+});
+
 // ── Unicode ─────────────────────────────────────────────────────────
 
 describe("unicode content", () => {
