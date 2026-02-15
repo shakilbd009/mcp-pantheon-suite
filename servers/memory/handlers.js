@@ -3,6 +3,7 @@
  * Each handler accepts (db, agentName, params) and returns MCP-compatible results.
  */
 import { uuid8, now } from "../../shared/db.js";
+import { buildWhereClause, buildSetClause } from "../../shared/query.js";
 
 // ── Schema ───────────────────────────────────────────────────────────
 
@@ -55,26 +56,19 @@ export function storeMemory(db, agentName, { content, memory_type = "observation
 
 export function recall(db, agentName, { query, tags, memory_type = "any", limit = 10 }) {
   try {
-    let clauses = ["agent_name = ?"];
-    let params = [agentName];
+    const filters = [{ column: "agent_name", value: agentName }];
+    if (query) filters.push({ column: "content", value: `%${query}%`, op: "LIKE" });
+    if (memory_type && memory_type !== "any") filters.push({ column: "memory_type", value: memory_type });
 
-    if (query) {
-      clauses.push("content LIKE ?");
-      params.push(`%${query}%`);
-    }
-    if (memory_type && memory_type !== "any") {
-      clauses.push("memory_type = ?");
-      params.push(memory_type);
-    }
+    let { sql: where, params } = buildWhereClause(filters);
+
+    // Tag OR-grouping stays inline (too complex for the helper)
     if (tags && tags.length > 0) {
       const tagClauses = tags.map(() => "tags LIKE ?");
-      clauses.push(`(${tagClauses.join(" OR ")})`);
-      for (const tag of tags) {
-        params.push(`%"${tag}"%`);
-      }
+      where += " AND (" + tagClauses.join(" OR ") + ")";
+      for (const tag of tags) params.push(`%"${tag}"%`);
     }
 
-    const where = clauses.join(" AND ");
     params.push(limit);
 
     const rows = db.prepare(
@@ -173,18 +167,18 @@ export function updateMemory(db, agentName, { memory_id, content, importance, ta
       return { content: [{ type: "text", text: `Memory "${memory_id}" not found.` }] };
     }
 
-    const updates = [];
-    const params = [];
-    if (content !== undefined) { updates.push("content = ?"); params.push(content); }
-    if (importance !== undefined) { updates.push("importance = ?"); params.push(importance); }
-    if (tags !== undefined) { updates.push("tags = ?"); params.push(JSON.stringify(tags)); }
+    const fields = {};
+    if (content !== undefined) fields.content = content;
+    if (importance !== undefined) fields.importance = importance;
+    if (tags !== undefined) fields.tags = JSON.stringify(tags);
 
-    if (updates.length === 0) {
+    if (Object.keys(fields).length === 0) {
       return { content: [{ type: "text", text: "No fields to update." }] };
     }
 
+    const { sql: sets, params } = buildSetClause(fields);
     params.push(memory_id);
-    db.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+    db.prepare(`UPDATE memories SET ${sets} WHERE id = ?`).run(...params);
 
     return { content: [{ type: "text", text: `Memory "${memory_id}" updated.` }] };
   } catch (err) {
