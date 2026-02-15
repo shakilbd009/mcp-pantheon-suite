@@ -3,6 +3,7 @@
  * Each handler accepts (db, agentName, params) and returns MCP-compatible results.
  */
 import { uuid8, now } from "../../shared/db.js";
+import { buildWhereClause, buildSetClause, safeJsonParse } from "../../shared/query.js";
 
 // ── Schema ───────────────────────────────────────────────────────────
 
@@ -212,15 +213,14 @@ export function createTask(db, agentName, { project, title, description = "", pr
 
 export function listTasks(db, agentName, { project, status = "all", assigned_to, limit = 30 }) {
   try {
-    const clauses = [];
-    const params = [];
+    const filters = [];
+    if (project) filters.push({ column: "project", value: project });
+    if (status && status !== "all") filters.push({ column: "status", value: status });
+    if (assigned_to) filters.push({ column: "assigned_to", value: assigned_to });
 
-    if (project) { clauses.push("project = ?"); params.push(project); }
-    if (status && status !== "all") { clauses.push("status = ?"); params.push(status); }
-    if (assigned_to) { clauses.push("assigned_to = ?"); params.push(assigned_to); }
-
+    const { sql: where, params } = buildWhereClause(filters);
     let sql = "SELECT * FROM tasks";
-    if (clauses.length) sql += " WHERE " + clauses.join(" AND ");
+    if (where) sql += " WHERE " + where;
     sql += " ORDER BY priority ASC, created_at ASC LIMIT ?";
     params.push(limit);
 
@@ -343,8 +343,7 @@ export function getTask(db, agentName, { task_id }) {
     if (reviews.length > 0) {
       lines.push("", `--- Reviews (${reviews.length}) ---`);
       for (const r of reviews) {
-        let cats;
-        try { cats = r.categories ? JSON.parse(r.categories) : []; if (!Array.isArray(cats)) cats = []; } catch { console.error("[warn] review " + r.id + ": corrupt categories JSON"); cats = []; }
+        const cats = safeJsonParse(r.categories, [], "review " + r.id + " categories");
         const catStr = cats.length > 0 ? ` [${cats.join(", ")}]` : "";
         lines.push(`[${r.created_at}] ${r.author}: ${r.verdict.toUpperCase()}${catStr}`);
         lines.push(`  ${r.content}`);
@@ -490,8 +489,8 @@ export function updateTask(db, agentName, { task_id, status, assigned_to, branch
     }
 
     updates.updated_at = now();
-    const sets = Object.keys(updates).map((k) => `${k} = ?`).join(", ");
-    const vals = [...Object.values(updates), task_id];
+    const { sql: sets, params: vals } = buildSetClause(updates);
+    vals.push(task_id);
     const updateTx = db.transaction(() => {
       db.prepare(`UPDATE tasks SET ${sets} WHERE id = ?`).run(...vals);
 
@@ -789,14 +788,13 @@ export function createInitiative(db, agentName, { title, description = "", parti
 
 export function listInitiatives(db, agentName, { status = "active", owner, limit = 20 }) {
   try {
-    const clauses = [];
-    const params = [];
+    const filters = [];
+    if (status && status !== "all") filters.push({ column: "status", value: status });
+    if (owner) filters.push({ column: "owner", value: owner });
 
-    if (status && status !== "all") { clauses.push("status = ?"); params.push(status); }
-    if (owner) { clauses.push("owner = ?"); params.push(owner); }
-
+    const { sql: where, params } = buildWhereClause(filters);
     let sql = "SELECT * FROM initiatives";
-    if (clauses.length) sql += " WHERE " + clauses.join(" AND ");
+    if (where) sql += " WHERE " + where;
     sql += " ORDER BY updated_at DESC LIMIT ?";
     params.push(limit);
 
@@ -809,8 +807,7 @@ export function listInitiatives(db, agentName, { status = "active", owner, limit
     const lines = rows.map((i) => {
       const pct = i.progress_pct || 0;
       const target = i.target_date ? ` (target: ${i.target_date})` : "";
-      let agents;
-      try { agents = JSON.parse(i.participating_agents || "[]"); if (!Array.isArray(agents)) agents = []; } catch { console.error("[warn] initiative " + i.id + ": corrupt participating_agents JSON"); agents = []; }
+      const agents = safeJsonParse(i.participating_agents, [], "initiative " + i.id + " agents");
       const agentStr = agents.length ? ` → ${agents.join(", ")}` : "";
       return `${i.id} | [${i.status}] ${pct}% | ${i.title} (owner: ${i.owner})${agentStr}${target}`;
     });
@@ -828,8 +825,8 @@ export function getInitiative(db, agentName, { initiative_id }) {
       return { content: [{ type: "text", text: `Initiative '${initiative_id}' not found.` }], isError: true };
     }
 
-    let participants, criteria;
-    try { participants = JSON.parse(initiative.participating_agents || "[]"); if (!Array.isArray(participants)) participants = []; } catch { console.error("[warn] initiative " + initiative.id + ": corrupt participating_agents JSON"); participants = []; }
+    const participants = safeJsonParse(initiative.participating_agents, [], "initiative " + initiative.id + " agents");
+    let criteria;
     try {
       criteria = JSON.parse(initiative.success_criteria || "[]");
       if (!Array.isArray(criteria)) criteria = [];
@@ -890,27 +887,26 @@ export function updateInitiative(db, agentName, { initiative_id, status, progres
       return { content: [{ type: "text", text: `Initiative '${initiative_id}' not found.` }], isError: true };
     }
 
-    const sets = [];
-    const params = [];
-    if (status !== undefined) { sets.push("status = ?"); params.push(status); }
-    if (progress_pct !== undefined) { sets.push("progress_pct = ?"); params.push(progress_pct); }
-    if (description !== undefined) { sets.push("description = ?"); params.push(description); }
-    if (title !== undefined) { sets.push("title = ?"); params.push(title); }
-    if (participants !== undefined) { sets.push("participating_agents = ?"); params.push(JSON.stringify(participants)); }
-    if (criteria !== undefined) { sets.push("success_criteria = ?"); params.push(JSON.stringify(criteria)); }
-    if (target_date !== undefined) { sets.push("target_date = ?"); params.push(target_date); }
+    const updates = {};
+    if (status !== undefined) updates.status = status;
+    if (progress_pct !== undefined) updates.progress_pct = progress_pct;
+    if (description !== undefined) updates.description = description;
+    if (title !== undefined) updates.title = title;
+    if (participants !== undefined) updates.participating_agents = JSON.stringify(participants);
+    if (criteria !== undefined) updates.success_criteria = JSON.stringify(criteria);
+    if (target_date !== undefined) updates.target_date = target_date;
 
-    if (sets.length === 0) {
+    if (Object.keys(updates).length === 0) {
       return { content: [{ type: "text", text: "No fields to update." }], isError: true };
     }
 
-    sets.push("updated_at = ?");
-    params.push(now());
+    updates.updated_at = now();
+    const { sql: sets, params } = buildSetClause(updates);
     params.push(initiative_id);
 
-    db.prepare(`UPDATE initiatives SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+    db.prepare(`UPDATE initiatives SET ${sets} WHERE id = ?`).run(...params);
 
-    const changes = sets.slice(0, -1).map(s => s.split(" = ")[0]).join(", ");
+    const changes = Object.keys(updates).filter(k => k !== "updated_at").join(", ");
     return { content: [{ type: "text", text: `Initiative ${initiative_id} updated: ${changes}` }] };
   } catch (err) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
