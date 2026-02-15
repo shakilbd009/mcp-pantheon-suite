@@ -321,7 +321,12 @@ export function getTask(db, agentName, { task_id }) {
 
     // Acceptance criteria checklist
     let criteriaItems = [];
-    try { criteriaItems = JSON.parse(task.criteria || "[]"); } catch {}
+    try {
+      criteriaItems = JSON.parse(task.criteria || "[]");
+      if (!Array.isArray(criteriaItems)) criteriaItems = [];
+    } catch {
+      return { content: [{ type: "text", text: "Data corruption: task " + task.id + " has invalid JSON in criteria field" }], isError: true };
+    }
     if (criteriaItems.length > 0) {
       const done = criteriaItems.filter((c) => c.checked).length;
       lines.push("", `--- Acceptance Criteria (${done}/${criteriaItems.length}) ---`);
@@ -338,7 +343,8 @@ export function getTask(db, agentName, { task_id }) {
     if (reviews.length > 0) {
       lines.push("", `--- Reviews (${reviews.length}) ---`);
       for (const r of reviews) {
-        const cats = r.categories ? JSON.parse(r.categories) : [];
+        let cats;
+        try { cats = r.categories ? JSON.parse(r.categories) : []; if (!Array.isArray(cats)) cats = []; } catch { console.error("[warn] review " + r.id + ": corrupt categories JSON"); cats = []; }
         const catStr = cats.length > 0 ? ` [${cats.join(", ")}]` : "";
         lines.push(`[${r.created_at}] ${r.author}: ${r.verdict.toUpperCase()}${catStr}`);
         lines.push(`  ${r.content}`);
@@ -591,8 +597,9 @@ export function checkCriterion(db, agentName, { task_id, criterion_id, checked =
     let items;
     try {
       items = JSON.parse(task.criteria || "[]");
+      if (!Array.isArray(items)) items = [];
     } catch {
-      items = [];
+      return { content: [{ type: "text", text: "Data corruption: task " + task.id + " has invalid JSON in criteria field" }], isError: true };
     }
 
     const item = items.find((c) => c.id === criterion_id);
@@ -803,7 +810,7 @@ export function listInitiatives(db, agentName, { status = "active", owner, limit
       const pct = i.progress_pct || 0;
       const target = i.target_date ? ` (target: ${i.target_date})` : "";
       let agents;
-      try { agents = JSON.parse(i.participating_agents || "[]"); } catch { agents = []; }
+      try { agents = JSON.parse(i.participating_agents || "[]"); if (!Array.isArray(agents)) agents = []; } catch { console.error("[warn] initiative " + i.id + ": corrupt participating_agents JSON"); agents = []; }
       const agentStr = agents.length ? ` → ${agents.join(", ")}` : "";
       return `${i.id} | [${i.status}] ${pct}% | ${i.title} (owner: ${i.owner})${agentStr}${target}`;
     });
@@ -822,8 +829,13 @@ export function getInitiative(db, agentName, { initiative_id }) {
     }
 
     let participants, criteria;
-    try { participants = JSON.parse(initiative.participating_agents || "[]"); } catch { participants = []; }
-    try { criteria = JSON.parse(initiative.success_criteria || "[]"); } catch { criteria = []; }
+    try { participants = JSON.parse(initiative.participating_agents || "[]"); if (!Array.isArray(participants)) participants = []; } catch { console.error("[warn] initiative " + initiative.id + ": corrupt participating_agents JSON"); participants = []; }
+    try {
+      criteria = JSON.parse(initiative.success_criteria || "[]");
+      if (!Array.isArray(criteria)) criteria = [];
+    } catch {
+      return { content: [{ type: "text", text: "Data corruption: initiative " + initiative.id + " has invalid JSON in success_criteria field" }], isError: true };
+    }
 
     const tasks = db.prepare(
       `SELECT it.role, it.linked_by, t.id, t.title, t.status, t.assigned_to, t.project, t.priority
