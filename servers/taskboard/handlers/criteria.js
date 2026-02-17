@@ -2,6 +2,7 @@
  * Acceptance criteria handlers.
  */
 import { now } from "../../../shared/db.js";
+import { safeJsonParse } from "../../../shared/query.js";
 
 export function setCriteria(db, agentName, { task_id, criteria }) {
   try {
@@ -33,13 +34,7 @@ export function checkCriterion(db, agentName, { task_id, criterion_id, checked =
       return { content: [{ type: "text", text: `Task '${task_id}' not found.` }], isError: true };
     }
 
-    let items;
-    try {
-      items = JSON.parse(task.criteria || "[]");
-      if (!Array.isArray(items)) items = [];
-    } catch {
-      return { content: [{ type: "text", text: "Data corruption: task " + task.id + " has invalid JSON in criteria field" }], isError: true };
-    }
+    const items = safeJsonParse(task.criteria, [], "checkCriterion task " + task_id + " criteria");
 
     const item = items.find((c) => c.id === criterion_id);
     if (!item) {
