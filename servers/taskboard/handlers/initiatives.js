@@ -4,6 +4,12 @@
 import { uuid8, now } from "../../../shared/db.js";
 import { buildWhereClause, buildSetClause, safeJsonParse } from "../../../shared/query.js";
 
+const INITIATIVE_WHERE_COLUMNS = new Set(["status", "owner"]);
+const INITIATIVE_SET_COLUMNS = new Set([
+  "status", "progress_pct", "description", "title",
+  "participating_agents", "success_criteria", "target_date", "updated_at",
+]);
+
 export function createInitiative(db, agentName, { title, description = "", participants = [], criteria = [], target_date }) {
   try {
     const id = uuid8();
@@ -27,7 +33,7 @@ export function listInitiatives(db, agentName, { status = "active", owner, limit
     if (status && status !== "all") filters.push({ column: "status", value: status });
     if (owner) filters.push({ column: "owner", value: owner });
 
-    const { sql: where, params } = buildWhereClause(filters);
+    const { sql: where, params } = buildWhereClause(filters, { allowedColumns: INITIATIVE_WHERE_COLUMNS });
     let sql = "SELECT * FROM initiatives";
     if (where) sql += " WHERE " + where;
     sql += " ORDER BY updated_at DESC LIMIT ?";
@@ -136,7 +142,7 @@ export function updateInitiative(db, agentName, { initiative_id, status, progres
     }
 
     updates.updated_at = now();
-    const { sql: sets, params } = buildSetClause(updates);
+    const { sql: sets, params } = buildSetClause(updates, { allowedColumns: INITIATIVE_SET_COLUMNS });
     params.push(initiative_id);
 
     db.prepare(`UPDATE initiatives SET ${sets} WHERE id = ?`).run(...params);

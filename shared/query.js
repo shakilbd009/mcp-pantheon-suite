@@ -5,14 +5,18 @@
 /**
  * Build a WHERE clause from an array of filter objects.
  * @param {Array<{column: string, value: any, op?: string}>} filters
+ * @param {{ allowedColumns?: Set<string> }} [options] - When provided, rejects columns not in the set (defense-in-depth against column name injection)
  * @returns {{ sql: string, params: any[] }}
  */
-export function buildWhereClause(filters) {
+export function buildWhereClause(filters, { allowedColumns } = {}) {
   if (!filters || filters.length === 0) return { sql: "", params: [] };
 
   const parts = [];
   const params = [];
   for (const f of filters) {
+    if (allowedColumns && !allowedColumns.has(f.column)) {
+      throw new Error(`Invalid column: ${f.column}`);
+    }
     const op = f.op || "=";
     parts.push(`${f.column} ${op} ?`);
     params.push(f.value);
@@ -23,9 +27,10 @@ export function buildWhereClause(filters) {
 /**
  * Build a SET clause from a plain object of column:value pairs.
  * @param {Record<string, any>} updates
+ * @param {{ allowedColumns?: Set<string> }} [options] - When provided, rejects columns not in the set (defense-in-depth against column name injection)
  * @returns {{ sql: string, params: any[] }}
  */
-export function buildSetClause(updates) {
+export function buildSetClause(updates, { allowedColumns } = {}) {
   if (!updates) return { sql: "", params: [] };
 
   const keys = Object.keys(updates);
@@ -34,6 +39,9 @@ export function buildSetClause(updates) {
   const parts = [];
   const params = [];
   for (const key of keys) {
+    if (allowedColumns && !allowedColumns.has(key)) {
+      throw new Error(`Invalid column: ${key}`);
+    }
     parts.push(`${key} = ?`);
     params.push(updates[key]);
   }

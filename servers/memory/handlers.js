@@ -5,6 +5,9 @@
 import { uuid8, now } from "../../shared/db.js";
 import { buildWhereClause, buildSetClause, safeJsonParse } from "../../shared/query.js";
 
+const MEMORY_WHERE_COLUMNS = new Set(["agent_name", "content", "memory_type"]);
+const MEMORY_SET_COLUMNS = new Set(["content", "importance", "tags"]);
+
 // ── Schema ───────────────────────────────────────────────────────────
 
 export function initSchema(db) {
@@ -60,7 +63,7 @@ export function recall(db, agentName, { query, tags, memory_type = "any", limit 
     if (query) filters.push({ column: "content", value: `%${query}%`, op: "LIKE" });
     if (memory_type && memory_type !== "any") filters.push({ column: "memory_type", value: memory_type });
 
-    let { sql: where, params } = buildWhereClause(filters);
+    let { sql: where, params } = buildWhereClause(filters, { allowedColumns: MEMORY_WHERE_COLUMNS });
 
     // Tag OR-grouping stays inline (too complex for the helper)
     if (tags && tags.length > 0) {
@@ -162,7 +165,7 @@ export function updateMemory(db, agentName, { memory_id, content, importance, ta
       return { content: [{ type: "text", text: "No fields to update." }] };
     }
 
-    const { sql: sets, params } = buildSetClause(fields);
+    const { sql: sets, params } = buildSetClause(fields, { allowedColumns: MEMORY_SET_COLUMNS });
     params.push(memory_id);
     db.prepare(`UPDATE memories SET ${sets} WHERE id = ?`).run(...params);
 

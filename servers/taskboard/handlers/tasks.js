@@ -5,6 +5,13 @@ import { uuid8, now } from "../../../shared/db.js";
 import { buildWhereClause, buildSetClause, safeJsonParse } from "../../../shared/query.js";
 import { getTransitions, getDefaultStatus, OPS_STATUSES, FORGE_STATUSES } from "./schema.js";
 
+const TASK_WHERE_COLUMNS = new Set(["project", "status", "assigned_to"]);
+const TASK_SET_COLUMNS = new Set([
+  "status", "assigned_to", "branch", "spec_file", "design_file",
+  "title", "description", "priority", "pr_url", "pr_number",
+  "pr_merged", "parent_task_id", "due_date", "updated_at",
+]);
+
 export function createTask(db, agentName, { project, title, description = "", priority = 5, status, assigned_to, parent_task_id, due_date }) {
   try {
     const id = uuid8();
@@ -58,7 +65,7 @@ export function listTasks(db, agentName, { project, status = "all", assigned_to,
     if (status && status !== "all") filters.push({ column: "status", value: status });
     if (assigned_to) filters.push({ column: "assigned_to", value: assigned_to });
 
-    const { sql: where, params } = buildWhereClause(filters);
+    const { sql: where, params } = buildWhereClause(filters, { allowedColumns: TASK_WHERE_COLUMNS });
     let sql = "SELECT * FROM tasks";
     if (where) sql += " WHERE " + where;
     sql += " ORDER BY priority ASC, created_at ASC LIMIT ?";
@@ -329,7 +336,7 @@ export function updateTask(db, agentName, { task_id, status, assigned_to, branch
     }
 
     updates.updated_at = now();
-    const { sql: sets, params: vals } = buildSetClause(updates);
+    const { sql: sets, params: vals } = buildSetClause(updates, { allowedColumns: TASK_SET_COLUMNS });
     vals.push(task_id);
     const updateTx = db.transaction(() => {
       db.prepare(`UPDATE tasks SET ${sets} WHERE id = ?`).run(...vals);
