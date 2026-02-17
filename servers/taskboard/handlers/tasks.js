@@ -250,6 +250,44 @@ export function getTask(db, agentName, { task_id }) {
   }
 }
 
+function validateParentChange(db, taskId, newParentId) {
+  if (newParentId === taskId) {
+    return { valid: false, error: "Error: A task cannot be its own parent." };
+  }
+  const parent = db.prepare("SELECT * FROM tasks WHERE id = ?").get(newParentId);
+  if (!parent) {
+    return { valid: false, error: `Error: Parent task '${newParentId}' not found.` };
+  }
+  if (parent.parent_task_id) {
+    return { valid: false, error: "Error: Cannot nest subtasks more than one level deep." };
+  }
+  const hasChildren = db.prepare("SELECT COUNT(*) as cnt FROM tasks WHERE parent_task_id = ?").get(taskId);
+  if (hasChildren && hasChildren.cnt > 0) {
+    return { valid: false, error: "Error: Cannot make a parent task into a subtask." };
+  }
+  return { valid: true };
+}
+
+function recordStatusHistory(db, taskId, oldStatus, newStatus, agentName) {
+  const commentId = uuid8();
+  db.prepare(
+    "INSERT INTO task_comments (id, task_id, author, content) VALUES (?, ?, ?, ?)"
+  ).run(commentId, taskId, agentName, `Status: ${oldStatus} → ${newStatus}`);
+
+  const lastHist = db.prepare(
+    "SELECT changed_at FROM task_history WHERE task_id = ? ORDER BY changed_at DESC LIMIT 1"
+  ).get(taskId);
+  let duration = null;
+  if (lastHist && lastHist.changed_at) {
+    duration = Math.round((Date.now() - new Date(lastHist.changed_at).getTime()) / 1000);
+  }
+  const histId = uuid8();
+  db.prepare(
+    `INSERT INTO task_history (id, task_id, from_status, to_status, changed_by, changed_at, duration_seconds)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(histId, taskId, oldStatus, newStatus, agentName, now(), duration);
+}
+
 export function updateTask(db, agentName, { task_id, status, assigned_to, branch, spec_file, design_file, title, description, priority, pr_url, pr_number, pr_merged, parent_task_id, due_date, expected_status }) {
   try {
     const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(task_id);
@@ -289,22 +327,10 @@ export function updateTask(db, agentName, { task_id, status, assigned_to, branch
     }
 
     // Validate parent_task_id changes
-    if (parent_task_id !== undefined) {
-      if (parent_task_id !== null) {
-        if (parent_task_id === task_id) {
-          return { content: [{ type: "text", text: `Error: A task cannot be its own parent.` }], isError: true };
-        }
-        const parent = db.prepare("SELECT * FROM tasks WHERE id = ?").get(parent_task_id);
-        if (!parent) {
-          return { content: [{ type: "text", text: `Error: Parent task '${parent_task_id}' not found.` }], isError: true };
-        }
-        if (parent.parent_task_id) {
-          return { content: [{ type: "text", text: `Error: Cannot nest subtasks more than one level deep.` }], isError: true };
-        }
-        const hasChildren = db.prepare("SELECT COUNT(*) as cnt FROM tasks WHERE parent_task_id = ?").get(task_id);
-        if (hasChildren && hasChildren.cnt > 0) {
-          return { content: [{ type: "text", text: `Error: Cannot make a parent task into a subtask.` }], isError: true };
-        }
+    if (parent_task_id !== undefined && parent_task_id !== null) {
+      const check = validateParentChange(db, task_id, parent_task_id);
+      if (!check.valid) {
+        return { content: [{ type: "text", text: check.error }], isError: true };
       }
     }
 
@@ -336,24 +362,7 @@ export function updateTask(db, agentName, { task_id, status, assigned_to, branch
 
       // Auto-comment on status transitions + record history
       if (status && status !== task.status) {
-        const commentId = uuid8();
-        db.prepare(
-          "INSERT INTO task_comments (id, task_id, author, content) VALUES (?, ?, ?, ?)"
-        ).run(commentId, task_id, agentName, `Status: ${task.status} → ${status}`);
-
-        // Compute duration from last transition
-        const lastHist = db.prepare(
-          "SELECT changed_at FROM task_history WHERE task_id = ? ORDER BY changed_at DESC LIMIT 1"
-        ).get(task_id);
-        let duration = null;
-        if (lastHist && lastHist.changed_at) {
-          duration = Math.round((Date.now() - new Date(lastHist.changed_at).getTime()) / 1000);
-        }
-        const histId = uuid8();
-        db.prepare(
-          `INSERT INTO task_history (id, task_id, from_status, to_status, changed_by, changed_at, duration_seconds)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(histId, task_id, task.status, status, agentName, now(), duration);
+        recordStatusHistory(db, task_id, task.status, status, agentName);
       }
     });
     updateTx();
