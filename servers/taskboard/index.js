@@ -52,7 +52,7 @@ import {
   updateInitiative,
   linkTaskToInitiative,
   addInitiativeUpdate,
-} from "./handlers.js";
+} from "./handlers/index.js";
 
 // ── Init ─────────────────────────────────────────────────────────────
 

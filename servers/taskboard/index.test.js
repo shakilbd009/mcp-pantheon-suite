@@ -18,7 +18,7 @@ import {
   addDependency,
   removeDependency,
   deleteTask,
-} from "./handlers.js";
+} from "./handlers/index.js";
 
 const AGENT = "test-agent";
 

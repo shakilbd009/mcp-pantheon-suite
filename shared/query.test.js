@@ -44,6 +44,27 @@ describe("buildWhereClause", () => {
     expect(result.sql).toBe("a = ? AND b >= ? AND c = ?");
     expect(result.params).toEqual([1, 2, 3]);
   });
+
+  it("passes when column is in allowedColumns", () => {
+    const allowed = new Set(["status", "priority"]);
+    const result = buildWhereClause(
+      [{ column: "status", value: "active" }],
+      { allowedColumns: allowed }
+    );
+    expect(result.sql).toBe("status = ?");
+  });
+
+  it("throws when column is not in allowedColumns", () => {
+    const allowed = new Set(["status"]);
+    expect(() =>
+      buildWhereClause([{ column: "malicious", value: "x" }], { allowedColumns: allowed })
+    ).toThrow("Invalid column: malicious");
+  });
+
+  it("skips validation when allowedColumns is not provided", () => {
+    const result = buildWhereClause([{ column: "anything", value: 1 }]);
+    expect(result.sql).toBe("anything = ?");
+  });
 });
 
 describe("buildSetClause", () => {
@@ -72,6 +93,24 @@ describe("buildSetClause", () => {
   it("preserves insertion order of keys", () => {
     const result = buildSetClause({ z: 3, a: 1, m: 2 });
     expect(result.params).toEqual([3, 1, 2]);
+  });
+
+  it("passes when column is in allowedColumns", () => {
+    const allowed = new Set(["status", "updated_at"]);
+    const result = buildSetClause({ status: "done" }, { allowedColumns: allowed });
+    expect(result.sql).toBe("status = ?");
+  });
+
+  it("throws when column is not in allowedColumns", () => {
+    const allowed = new Set(["status"]);
+    expect(() =>
+      buildSetClause({ injected: "DROP TABLE" }, { allowedColumns: allowed })
+    ).toThrow("Invalid column: injected");
+  });
+
+  it("skips validation when allowedColumns is not provided", () => {
+    const result = buildSetClause({ anything: 1 });
+    expect(result.sql).toBe("anything = ?");
   });
 });
 

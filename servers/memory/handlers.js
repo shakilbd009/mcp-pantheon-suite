@@ -3,6 +3,10 @@
  * Each handler accepts (db, agentName, params) and returns MCP-compatible results.
  */
 import { uuid8, now } from "../../shared/db.js";
+import { buildWhereClause, buildSetClause, safeJsonParse } from "../../shared/query.js";
+
+const MEMORY_WHERE_COLUMNS = new Set(["agent_name", "content", "memory_type"]);
+const MEMORY_SET_COLUMNS = new Set(["content", "importance", "tags"]);
 
 // ── Schema ───────────────────────────────────────────────────────────
 
@@ -55,26 +59,19 @@ export function storeMemory(db, agentName, { content, memory_type = "observation
 
 export function recall(db, agentName, { query, tags, memory_type = "any", limit = 10 }) {
   try {
-    let clauses = ["agent_name = ?"];
-    let params = [agentName];
+    const filters = [{ column: "agent_name", value: agentName }];
+    if (query) filters.push({ column: "content", value: `%${query}%`, op: "LIKE" });
+    if (memory_type && memory_type !== "any") filters.push({ column: "memory_type", value: memory_type });
 
-    if (query) {
-      clauses.push("content LIKE ?");
-      params.push(`%${query}%`);
-    }
-    if (memory_type && memory_type !== "any") {
-      clauses.push("memory_type = ?");
-      params.push(memory_type);
-    }
+    let { sql: where, params } = buildWhereClause(filters, { allowedColumns: MEMORY_WHERE_COLUMNS });
+
+    // Tag OR-grouping stays inline (too complex for the helper)
     if (tags && tags.length > 0) {
       const tagClauses = tags.map(() => "tags LIKE ?");
-      clauses.push(`(${tagClauses.join(" OR ")})`);
-      for (const tag of tags) {
-        params.push(`%"${tag}"%`);
-      }
+      where += " AND (" + tagClauses.join(" OR ") + ")";
+      for (const tag of tags) params.push(`%"${tag}"%`);
     }
 
-    const where = clauses.join(" AND ");
     params.push(limit);
 
     const rows = db.prepare(
@@ -97,14 +94,7 @@ export function recall(db, agentName, { query, tags, memory_type = "any", limit 
     ).run(ts, ...ids);
 
     const lines = rows.map((r) => {
-      let memTags;
-      try {
-        memTags = JSON.parse(r.tags);
-        if (!Array.isArray(memTags)) memTags = ["CORRUPTED"];
-      } catch {
-        console.error(`[warn] memory ${r.id}: corrupt tags JSON`);
-        memTags = ["CORRUPTED"];
-      }
+      const memTags = safeJsonParse(r.tags, ["CORRUPTED"], "memory " + r.id + " tags");
       return `[${r.id}] (${r.memory_type}, importance: ${r.importance}/10) ${r.content}\n  Tags: ${memTags.join(", ")} | Created: ${r.created_at} | Accessed: ${r.access_count + 1}x`;
     });
 
@@ -135,14 +125,7 @@ export function listMemories(db, agentName, { memory_type = "any", limit = 20 })
 
     const lines = rows.map((r) => {
       const preview = r.content.length > 100 ? r.content.slice(0, 100) + "..." : r.content;
-      let memTags;
-      try {
-        memTags = JSON.parse(r.tags);
-        if (!Array.isArray(memTags)) memTags = ["CORRUPTED"];
-      } catch {
-        console.error(`[warn] memory ${r.id}: corrupt tags JSON`);
-        memTags = ["CORRUPTED"];
-      }
+      const memTags = safeJsonParse(r.tags, ["CORRUPTED"], "memory " + r.id + " tags");
       return `[${r.id}] ${r.memory_type} (${r.importance}/10): ${preview}  [${memTags.join(", ")}]`;
     });
 
@@ -173,18 +156,18 @@ export function updateMemory(db, agentName, { memory_id, content, importance, ta
       return { content: [{ type: "text", text: `Memory "${memory_id}" not found.` }] };
     }
 
-    const updates = [];
-    const params = [];
-    if (content !== undefined) { updates.push("content = ?"); params.push(content); }
-    if (importance !== undefined) { updates.push("importance = ?"); params.push(importance); }
-    if (tags !== undefined) { updates.push("tags = ?"); params.push(JSON.stringify(tags)); }
+    const fields = {};
+    if (content !== undefined) fields.content = content;
+    if (importance !== undefined) fields.importance = importance;
+    if (tags !== undefined) fields.tags = JSON.stringify(tags);
 
-    if (updates.length === 0) {
+    if (Object.keys(fields).length === 0) {
       return { content: [{ type: "text", text: "No fields to update." }] };
     }
 
+    const { sql: sets, params } = buildSetClause(fields, { allowedColumns: MEMORY_SET_COLUMNS });
     params.push(memory_id);
-    db.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+    db.prepare(`UPDATE memories SET ${sets} WHERE id = ?`).run(...params);
 
     return { content: [{ type: "text", text: `Memory "${memory_id}" updated.` }] };
   } catch (err) {
